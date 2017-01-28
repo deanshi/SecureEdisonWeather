@@ -2,9 +2,16 @@
 #include "rgb_lcd.h"
 #include <SPI.h>
 #include <WiFi.h>
+#include <ArduinoJson.h>
+#include <stdlib.h>
 
 #define PIR_MOTION_SENSOR 2
 #define LED 13
+
+// Libraries:
+// https://github.com/bblanchon/ArduinoJson
+// http://wiki.seeed.cc/Grove-LCD_RGB_Backlight/
+
 
 rgb_lcd lcd;  
 
@@ -14,21 +21,26 @@ const int colorG = 0;
 const int colorB = 0;
 
 // Wireless Information
-char ssid[] = ""; //  your network SSID (name) 
-char pass[] = "";
+const String APP_ID = "";
+const char server[] = "api.openweathermap.org";
+const int JSON_SIZE = 1024;
+
+char PERSONAL_SSID[] = ""; //  your network SSID (name) 
+char PASS[] = "";
+
 int keyIndex = 0;
 String nameOfCity = "Boston";
-char server[] = "api.openweathermap.org";
 int status = WL_IDLE_STATUS;
 
 WiFiClient client;
+char buffer[JSON_SIZE];
+char doubleBuffer[100];
 
 void setup() 
 {    
+    turnOffLcd();
     Serial.begin(9600);
-    printGoodMorning();
-    delay(10000);
-    lcd.setCursor(0,1);
+    //delay(10000);
     attachInterrupt(PIR_MOTION_SENSOR, startMotionInterrupt, RISING);
 }  
 
@@ -44,21 +56,23 @@ void printGoodMorning() {
   
   // Print a message to the LCD.
   lcd.print("Good Morning!");
+  lcd.setCursor(0,1);
 }
 
 void startMotionInterrupt() {
+  printGoodMorning();
   connectToWifi();
 }
 
 void connectToWifi() {
   while (status != WL_CONNECTED) { 
     Serial.print("Attempting to connect to SSID: ");
-    Serial.println(ssid);
+    Serial.println(PERSONAL_SSID);
     // Connect to WPA/WPA2 network. Change this line if using open or WEP network:    
-    status = WiFi.begin(ssid, pass);
+    status = WiFi.begin(PERSONAL_SSID, PASS);
   
-    // wait 10 seconds for connection:
-    delay(10000);
+    // wait 5 seconds for connection:
+    delay(5000);
   } 
   Serial.println("Connected to wifi");
   printWifiStatus();
@@ -66,53 +80,68 @@ void connectToWifi() {
 }
 
 void getWeatherInformation() {
+
+  StaticJsonBuffer<JSON_SIZE> jsonBuffer;
+ 
   Serial.println("\nStarting connection to server...");
   // if you get a connection, report back via serial:
   if (client.connect(server, 80)) {
     Serial.println("connected to server");
     // Make a HTTP request:
-    client.println("GET /data/2.5/weather?APPID=&q=" + nameOfCity + "&mode=json&units=metric&cnt=2 HTTP/1.1");
+    client.println("GET /data/2.5/weather?APPID=" + APP_ID + "&q=" + nameOfCity + "&mode=json&units=imperial&cnt=2 HTTP/1.1");
     client.println("Host: api.openweathermap.org");
     client.println("User-Agent: ArduinoWiFi/1.1");
     client.println("Connection: close");
     client.println();
-    getWeatherBytes();
+    
+    getWeatherBytes(buffer);
+
+    JsonObject& root = jsonBuffer.parseObject(buffer);
+
+    if (!root.success()) {
+      Serial.println("parseObject() failed");
+      return;
+    }
+    
+    const char* weatherType = root["weather"][0]["main"];
+    double temp = root["main"]["temp"];
+    Serial.println(weatherType);
+    Serial.println(temp);
+    
+    lcd.write(weatherType);
+    lcd.write(", ");
+    sprintf(doubleBuffer, "%1.1f", temp);
+    lcd.write(doubleBuffer);
+    lcd.write((char)223);
+    delay(10000);
+    turnOffLcd();
   }
- 
 }
 
-void getWeatherBytes() {
+void getWeatherBytes(char* jsonBuffer) {
+  boolean isJson = false;
+  int index = 0;
   while (client.available()) {
     char c = client.read();
-    Serial.write(c);
+    
+    if (c == '{') {
+      isJson = true;
+    }
+
+    if (isJson) {
+       jsonBuffer[index] = c;
+       index++;
+    }
   }
+  Serial.write(jsonBuffer);
   disconnectFromServer();
 }
 
 void disconnectFromServer() {
   Serial.println();
   Serial.println("disconnecting from server.");
-  client.disconnect();
   client.stop();
   status = WL_IDLE_STATUS;
-}
-
-void writeToLcd() {
-  lcd.setCursor(0, 1);
-  if (isMotionDetected()) {
-    lcd.write("Moving");
-  } else {
-    lcd.write("Not");
-  }
-}
-
-boolean isMotionDetected() {
-  int sensorValue = digitalRead(PIR_MOTION_SENSOR);
-  if (sensorValue == HIGH) {
-    return true;
-  } else {
-    return false;
-  }
 }
 
 void turnOffLcd() {
